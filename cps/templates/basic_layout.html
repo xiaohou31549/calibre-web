@@ -16,6 +16,9 @@
           <a href="{{url_for('basic.index')}}">
             <span><h1>{{_('Home')}}</h1></span>
           </a>
+          <a href="/wishlist">
+            <span>{{_('Wishlist')}}</span>
+          </a>
           <div class="search">
             <form role="search" action="{{url_for('basic.index')}}" method="GET">
               <input type="text" id="query" name="query" placeholder="{{_('Search Library')}}" value="{{ searchterm }}">
