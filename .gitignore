@@ -9,6 +9,7 @@ __pycache__/
 .python-version
 env/
 venv/
+.venv/
 eggs/
 dist/
 executable/
@@ -24,11 +25,13 @@ vendor/
 *.db
 *.log
 cps/cache
+library/
 
 .idea/
 *.bak
 *.log.*
 .key
+.DS_Store
 
 settings.yaml
 gdrive_credentials
