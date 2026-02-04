@@ -6,9 +6,6 @@ name = "calibre-web"
 script = ""
 
 [[actions]]
-name = "Run"
-icon = "run"
-command = '''
-source .venv/bin/activate
-python3 cps.py
-'''
+name = "dev_run"
+icon = "tool"
+command = "./scripts/dev_run.sh"
