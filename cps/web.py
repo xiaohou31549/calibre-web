@@ -207,6 +207,61 @@ def update_view():
     return "1", 200
 
 
+@web.route("/wishlist", methods=["GET"])
+@login_required_if_no_ano
+def wishlist():
+    form_data = {
+        "title": "",
+        "author": "",
+        "email": "",
+        "note": "",
+    }
+    return render_title_template(
+        "wishlist.html",
+        title=_("Wishlist"),
+        page="wishlist",
+        form_data=form_data,
+        errors=[],
+    )
+
+
+@web.route("/wishlist/submit", methods=["POST"])
+@login_required_if_no_ano
+def wishlist_submit():
+    title = strip_whitespaces(request.form.get("title", ""))
+    author = strip_whitespaces(request.form.get("author", ""))
+    email = strip_whitespaces(request.form.get("email", ""))
+    note = strip_whitespaces(request.form.get("note", ""))
+
+    errors = []
+    if not title:
+        errors.append(_("书名为必填项"))
+    if not email:
+        errors.append(_("邮箱为必填项"))
+    elif not valid_email(email):
+        errors.append(_("邮箱格式不正确"))
+    if len(note) > 100:
+        errors.append(_("备注不超过 100 个汉字"))
+
+    if errors:
+        form_data = {
+            "title": title,
+            "author": author,
+            "email": email,
+            "note": note,
+        }
+        return render_title_template(
+            "wishlist.html",
+            title=_("Wishlist"),
+            page="wishlist",
+            form_data=form_data,
+            errors=errors,
+        )
+
+    flash(_("提交成功，图书上架后会发送邮件通知。"), "success")
+    return redirect(url_for("web.wishlist"))
+
+
 '''
 @web.route("/ajax/getcomic/<int:book_id>/<book_format>/<int:page>")
 @user_login_required

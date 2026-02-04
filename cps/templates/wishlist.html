@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+{% block body %}
+<div class="well col-sm-8 col-sm-offset-1">
+  <h2 style="margin-top: 0">{{_('心愿单')}}</h2>
+  <p class="text-muted">{{_('填写你想要的图书，我们会在图书上架后邮件通知你。')}}</p>
+  <form method="POST" action="{{ url_for('web.wishlist_submit') }}" role="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group required">
+      <label for="wishlist_title">{{_('书名')}}</label>
+      <input type="text" class="form-control" id="wishlist_title" name="title" placeholder="{{_('请输入书名')}}"
+             value="{{ form_data.title }}" required>
+    </div>
+    <div class="form-group">
+      <label for="wishlist_author">{{_('作者')}}</label>
+      <input type="text" class="form-control" id="wishlist_author" name="author" placeholder="{{_('可选')}}"
+             value="{{ form_data.author }}">
+    </div>
+    <div class="form-group required">
+      <label for="wishlist_email">{{_('邮箱')}}</label>
+      <input type="email" class="form-control" id="wishlist_email" name="email" placeholder="{{_('用于上架通知')}}"
+             value="{{ form_data.email }}" required>
+    </div>
+    <div class="form-group">
+      <label for="wishlist_note">{{_('备注')}}</label>
+      <textarea class="form-control" id="wishlist_note" name="note" rows="4" maxlength="100"
+                placeholder="{{_('可选，最多 100 个汉字')}}">{{ form_data.note }}</textarea>
+      <span class="help-block">{{_('备注不超过 100 个汉字。')}}</span>
+    </div>
+    <button type="submit" id="wishlist_submit" class="btn btn-primary">{{_('提交心愿单')}}</button>
+  </form>
+</div>
+{% if errors %}
+<div class="col-sm-8 col-sm-offset-1">
+  <div class="alert alert-danger">
+    {% for error in errors %}
+      <div>{{ error }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
