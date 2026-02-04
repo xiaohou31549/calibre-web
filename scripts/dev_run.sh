@@ -8,4 +8,6 @@ if [ -f .env ]; then
   set +a
 fi
 
+source .venv/bin/activate
+
 python3 cps.py
