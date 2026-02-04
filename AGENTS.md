@@ -25,7 +25,14 @@
    ```bash
    pip install -r requirements.txt
    ```
-3. 启动服务（二选一）：
+3. 配置本地环境变量（推荐用 `.env` 放在项目根目录，勿提交）：
+   ```bash
+   FEISHU_APP_ID="..."
+   FEISHU_APP_SECRET="..."
+   FEISHU_BITABLE_APP_TOKEN="..."
+   FEISHU_BITABLE_TABLE_ID="..."
+   ```
+4. 启动服务（二选一）：
    - 直接运行：
      ```bash
      python3 cps.py
@@ -34,7 +41,11 @@
      ```bash
      cps
      ```
-4. 浏览器访问：
+   - 如果使用 `.env`，建议用脚本启动：
+     ```bash
+     ./scripts/dev_run.sh
+     ```
+5. 浏览器访问：
    - Web UI：`http://localhost:8083`
    - OPDS：`http://localhost:8083/opds`
 
@@ -56,7 +67,7 @@
 - 导航入口：`cps/templates` 中的基础布局/导航模板。
 - 新增页面：`cps/templates/wishlist.html`。
 - 新增路由：`GET /wishlist`、`POST /wishlist/submit`（通常在 `cps/` 的主路由模块）。
-- 外部 webhook：按 `calibre-web-wishlist-plan.md` 转发到 n8n。
+- 数据存储：后端直写飞书多维表格（需配置 `FEISHU_*` 环境变量）。
 
 ## 约定与注意事项
 - `app.db` 为本地状态，开发时可覆盖。

@@ -23,6 +23,7 @@ import json
 import mimetypes
 import chardet  # dependency of requests
 import copy
+import time
 from importlib.metadata import metadata
 
 from flask import Blueprint, jsonify, request, redirect, send_from_directory, make_response, flash, abort, url_for
@@ -60,6 +61,7 @@ from .services.worker import WorkerThread
 from .tasks_status import render_task_status
 from .usermanagement import user_login_required
 from .string_helper import strip_whitespaces
+from .services import feishu
 
 
 feature_support = {
@@ -244,6 +246,31 @@ def wishlist_submit():
         errors.append(_("备注不超过 100 个汉字"))
 
     if errors:
+        form_data = {
+            "title": title,
+            "author": author,
+            "email": email,
+            "note": note,
+        }
+        return render_title_template(
+            "wishlist.html",
+            title=_("Wishlist"),
+            page="wishlist",
+            form_data=form_data,
+            errors=errors,
+        )
+
+    fields = {
+        "书名": title,
+        "作者": author,
+        "邮箱": email,
+        "备注": note,
+        "提交时间": int(time.time() * 1000),
+    }
+    ok, error = feishu.create_wishlist_record(fields)
+    if not ok:
+        log.error("Wishlist submit failed: %s", error)
+        errors.append(_("提交失败，请稍后再试"))
         form_data = {
             "title": title,
             "author": author,
