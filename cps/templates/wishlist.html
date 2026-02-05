@@ -1,8 +1,43 @@
 {% extends "layout.html" %}
+{% block header %}
+  <style>
+    #wishlist_submit {
+      position: relative;
+    }
+
+    #wishlist_submit .wishlist-submit-spinner {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      margin: -8px 0 0 -8px;
+      border: 2px solid rgba(255, 255, 255, 0.6);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: wishlist-spin 0.8s linear infinite;
+    }
+
+    #wishlist_submit.is-loading .wishlist-submit-spinner {
+      display: block;
+    }
+
+    #wishlist_submit.is-loading .wishlist-submit-text {
+      visibility: hidden;
+    }
+
+    @keyframes wishlist-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+{% endblock %}
 {% block body %}
 <div class="well col-sm-8 col-sm-offset-1">
   <h2 style="margin-top: 0">{{_('心愿单')}}</h2>
-  <p class="text-muted">{{_('填写你想要的图书，我们会在图书上架后邮件通知你。')}}</p>
+  <p class="text-muted">{{_('填写你想要的图书，图书上架后会邮件通知你。')}}</p>
   <form method="POST" action="{{ url_for('web.wishlist_submit') }}" role="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-group required">
@@ -26,7 +61,10 @@
                 placeholder="{{_('可选，最多 100 个汉字')}}">{{ form_data.note }}</textarea>
       <span class="help-block">{{_('备注不超过 100 个汉字。')}}</span>
     </div>
-    <button type="submit" id="wishlist_submit" class="btn btn-primary">{{_('提交心愿单')}}</button>
+    <button type="submit" id="wishlist_submit" class="btn btn-primary">
+      <span class="wishlist-submit-text">{{_('提交心愿单')}}</span>
+      <span class="wishlist-submit-spinner" aria-hidden="true"></span>
+    </button>
   </form>
 </div>
 {% if errors %}
@@ -38,4 +76,26 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+{% block js %}
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      var form = document.querySelector("form[action='{{ url_for('web.wishlist_submit') }}']");
+      var submitButton = document.getElementById("wishlist_submit");
+
+      if (!form || !submitButton) {
+        return;
+      }
+
+      form.addEventListener("submit", function (event) {
+        if (submitButton.disabled) {
+          event.preventDefault();
+          return;
+        }
+
+        submitButton.disabled = true;
+        submitButton.classList.add("is-loading");
+      });
+    });
+  </script>
 {% endblock %}
