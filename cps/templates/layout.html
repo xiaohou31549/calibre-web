@@ -59,7 +59,7 @@
           </ul>
           {% endif %}
           <ul class="nav navbar-nav navbar-right" id="main-nav">
-            <li><a id="top_wishlist" href="/wishlist"><span class="glyphicon glyphicon-heart"></span> <span class="hidden-sm">{{_('Wishlist')}}</span></a></li>
+            <li><a id="top_wishlist" href="/wishlist" style="color: #e53935; font-size: 18px;"><span class="glyphicon glyphicon-heart" style="color: #e53935;"></span> <span class="hidden-sm" style="color: #e53935;">{{_('书籍心愿单')}}</span></a></li>
             {% if current_user.is_authenticated or g.allow_anonymous %}
               {% if g.current_theme == 1 %}
               <li class="dropdown"><a href="#" class="dropdown-toggle profileDrop" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false"><span class="glyphicon glyphicon-user"></span></a>
