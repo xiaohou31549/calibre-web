@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 
 from flask import Blueprint, flash, redirect, url_for, abort, request, make_response, \
     send_from_directory, g, jsonify
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from .cw_login import current_user
 from flask_babel import gettext as _
 from flask_babel import get_locale, format_time, format_datetime, format_timedelta
@@ -52,6 +52,7 @@ from .embed_helper import get_calibre_binarypath
 from .gdriveutils import is_gdrive_ready, gdrive_support
 from .render_template import render_title_template, get_sidebar_config
 from .services.worker import WorkerThread
+from .tasks.mail import TaskEmail
 from .usermanagement import user_login_required
 from .cw_babel import get_available_translations, get_available_locale, get_user_locale_language
 from . import debug_info
@@ -231,6 +232,128 @@ def admin():
                                  feature_support=feature_support, schedule_time=schedule_time,
                                  schedule_duration=schedule_duration,
                                  title=_("Admin page"), page="admin")
+
+
+# ################################### Wishlist admin ###############################################################
+
+# Column names used in the Feishu bitable. Keep these in sync with the table layout.
+WISHLIST_FIELD_TITLE = "书名"
+WISHLIST_FIELD_AUTHOR = "作者"
+WISHLIST_FIELD_EMAIL = "邮箱"
+WISHLIST_FIELD_NOTE = "备注"
+WISHLIST_FIELD_STATUS = "状态"
+WISHLIST_STATUS_DONE = "已通知"
+
+
+def _wishlist_field_text(value):
+    """Feishu text fields may come back as a string or a list of segments."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        parts = []
+        for seg in value:
+            if isinstance(seg, dict):
+                parts.append(seg.get("text", ""))
+            else:
+                parts.append(str(seg))
+        return "".join(parts).strip()
+    return str(value).strip()
+
+
+def _build_wishlist_email(book_title, book_url):
+    subject = book_title
+    link_text = "{} - 点击查看".format(book_title)
+    text = (
+        "你好！\n\n"
+        "关于你的书籍心愿单：《{title}》这本书，目前已经有相关资源了。\n\n"
+        "你可以通过以下链接直接访问或下载：{url}\n\n"
+        "希望这本书对你有所帮助。如果后续还有其他需要的书籍，欢迎随时沟通。\n\n"
+        "祝好！"
+    ).format(title=book_title, url=book_url)
+    html = (
+        "<p>你好！</p>"
+        "<p>关于你的书籍心愿单：《{title}》这本书，目前已经有相关资源了。</p>"
+        "<p>你可以通过以下链接直接访问或下载：<a href=\"{url}\">{link_text}</a></p>"
+        "<p>希望这本书对你有所帮助。如果后续还有其他需要的书籍，欢迎随时沟通。</p>"
+        "<p>祝好！</p>"
+    ).format(title=escape(book_title), url=escape(book_url), link_text=escape(link_text))
+    return subject, text, html
+
+
+@admi.route("/admin/wishlist", methods=["GET"])
+@user_login_required
+@admin_required
+def admin_wishlist():
+    from .services import feishu
+    records, error = feishu.list_wishlist_records()
+    items = []
+    if error:
+        if error == "missing_bitable_config":
+            flash(_("飞书多维表格未配置，请检查 FEISHU_* 环境变量"), category="error")
+        else:
+            flash(_("读取飞书心愿单失败，请稍后再试"), category="error")
+    else:
+        for rec in records:
+            fields = rec.get("fields") or {}
+            status = _wishlist_field_text(fields.get(WISHLIST_FIELD_STATUS))
+            items.append({
+                "record_id": rec.get("record_id"),
+                "title": _wishlist_field_text(fields.get(WISHLIST_FIELD_TITLE)),
+                "author": _wishlist_field_text(fields.get(WISHLIST_FIELD_AUTHOR)),
+                "email": _wishlist_field_text(fields.get(WISHLIST_FIELD_EMAIL)),
+                "note": _wishlist_field_text(fields.get(WISHLIST_FIELD_NOTE)),
+                "status": status,
+                "done": status == WISHLIST_STATUS_DONE,
+            })
+        # Surface pending requests first.
+        items.sort(key=lambda i: i["done"])
+    return render_title_template("admin_wishlist.html", items=items,
+                                 title=_("心愿单管理"), page="admin_wishlist")
+
+
+@admi.route("/admin/wishlist/fulfill", methods=["POST"])
+@user_login_required
+@admin_required
+def admin_wishlist_fulfill():
+    from .services import feishu
+    from .editbooks import create_book_from_uploaded_file
+
+    record_id = request.form.get("record_id", "")
+    email = strip_whitespaces(request.form.get("email", ""))
+    uploaded = request.files.get("btn-upload")
+
+    if not email:
+        flash(_("该记录缺少邮箱，无法发送通知"), category="error")
+        return redirect(url_for("admin.admin_wishlist"))
+    if not uploaded or not uploaded.filename:
+        flash(_("请先选择要上传的电子书文件"), category="error")
+        return redirect(url_for("admin.admin_wishlist"))
+    if not config.get_mail_server_configured():
+        flash(_("请先在管理后台配置 SMTP 邮件服务器"), category="error")
+        return redirect(url_for("admin.admin_wishlist"))
+
+    book_id, book_title, error = create_book_from_uploaded_file(uploaded)
+    if error or not book_id:
+        flash(_("上传图书失败：%(error)s", error=error or _("未知错误")), category="error")
+        return redirect(url_for("admin.admin_wishlist"))
+
+    book_url = url_for("web.show_book", book_id=book_id, _external=True)
+    subject, text, html = _build_wishlist_email(book_title, book_url)
+    WorkerThread.add(current_user.name,
+                     TaskEmail(subject, None, None, config.get_mail_settings(), email,
+                               _("心愿单图书通知"), text, internal=True, html=html))
+
+    # Write the fulfilled status back to Feishu so it is not processed again.
+    if record_id:
+        ok, upd_error = feishu.update_wishlist_record(
+            record_id, {WISHLIST_FIELD_STATUS: WISHLIST_STATUS_DONE})
+        if not ok:
+            log.error("Wishlist status write-back failed: %s", upd_error)
+            flash(_("图书已上传并发送邮件，但回写飞书状态失败"), category="warning")
+
+    flash(_("《%(title)s》已上传，下载链接已发送至 %(email)s", title=book_title, email=email),
+          category="success")
+    return redirect(url_for("admin.admin_wishlist"))
 
 
 @admi.route("/admin/dbconfig", methods=["GET", "POST"])
