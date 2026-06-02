@@ -63,11 +63,36 @@
 - 官方测试在独立仓库：`OzzieIsaacs/calibre-web-test`。
 - 前端可用 ESLint（配置见 `.eslintrc`）。
 
-## 心愿单功能相关改动点（参考）
-- 导航入口：`cps/templates` 中的基础布局/导航模板。
-- 新增页面：`cps/templates/wishlist.html`。
-- 新增路由：`GET /wishlist`、`POST /wishlist/submit`（通常在 `cps/` 的主路由模块）。
-- 数据存储：后端直写飞书多维表格（需配置 `FEISHU_*` 环境变量）。
+## 心愿单功能（用户侧：提交心愿单）
+- 导航入口：`cps/templates/layout.html` 中的导航菜单（红色 ❤️「书籍心愿单」）。
+- 页面：`cps/templates/wishlist.html`。
+- 路由：`GET /wishlist`、`POST /wishlist/submit`（`cps/web.py`）。
+- 数据存储：后端**直写**飞书多维表格（`cps/services/feishu.py` 的 `create_wishlist_record`）。
+  注意：早期方案文档写的是“后端转发 n8n Webhook → n8n 写飞书”，实际实现已改为后端直连飞书 API。
+
+## 心愿单管理（管理员侧：上架并通知用户）
+- 导航入口：`cps/templates/layout.html`，仅 `current_user.role_admin()` 可见的「心愿单管理」。
+- 页面：`cps/templates/admin_wishlist.html`。
+- 路由（`cps/admin.py`，均带 `@admin_required`）：
+  - `GET /admin/wishlist`：从飞书读取全部心愿单记录并渲染列表。
+  - `POST /admin/wishlist/fulfill`：上传电子书 → 建书 → 生成下载链接 → 邮件通知用户 → 回写飞书状态。
+- 关键依赖与复用：
+  - 上传建书：`cps/editbooks.py` 的 `create_book_from_uploaded_file()`（复用上传流程，返回 book_id）。
+  - 发邮件：`cps/tasks/mail.py` 的 `TaskEmail`（已支持可选 `html=` 参数发送 HTML 正文）。
+  - 飞书读写：`cps/services/feishu.py` 的 `list_wishlist_records()` 与 `update_wishlist_record()`。
+- 前置条件：
+  - 飞书多维表需有「状态」单选字段（选项含「已通知」），字段/选项名常量在 `cps/admin.py` 顶部（`WISHLIST_FIELD_*` / `WISHLIST_STATUS_DONE`），与表列名不一致时改这里。
+  - 站点需配置 SMTP（否则 `fulfill` 会在上传前拦截并提示）。
+  - 用户收到的下载链接指向 `web.show_book` 书籍页，需站点开启匿名浏览/匿名下载，游客才能访问。
+
+## 部署
+- CI：`.github/workflows/docker-publish.yml`，push 到 `master` 触发：构建镜像推 GHCR → SSH 到 VPS `docker compose pull/up -d` → 飞书 Webhook 通知部署结果。
+- 镜像：`Dockerfile` 基于 `lscr.io/linuxserver/calibre-web:latest` 叠加本仓库代码。
+- 生产 SMTP 用 Gmail（smtp.gmail.com:465 SSL + 应用专用密码），在管理后台「编辑邮件服务器设置」配置，不需要改代码。
+
+## 本地开发注意
+- 上传电子书依赖 `libmagic`（MIME 校验）。macOS 若未安装会导致所有上传被拒，需 `brew install libmagic`；
+  或临时在本地 `app.db` 设 `config_check_extensions=0` 绕过（仅本地调试用）。线上镜像自带 libmagic。
 
 ## 约定与注意事项
 - `app.db` 为本地状态，开发时可覆盖。

@@ -94,8 +94,43 @@
 
 ---
 
-如需我继续提供：
-- `n8n` 详细节点配置和字段映射
-- `calibre-web` 具体文件修改位置和代码骨架
-- Docker 构建与部署流程
-随时告诉我。
+## 实际实现（已上线）
+
+> 上面是初版规划；下面记录最终落地的实现，与规划有出入的地方以本节为准。
+
+### 与规划的主要差异
+- **不经过 n8n**：用户提交和管理员上架都由 `calibre-web` 后端**直连飞书 API**读写多维表，未使用 n8n Webhook 中转。
+- **新增管理员上架闭环**：除了用户提交，额外实现了管理员侧「心愿单管理」页面，把“上传电子书 → 通知用户”做成一键操作。
+
+### 两条链路
+1. 用户侧（提交）
+   - 页面 `cps/templates/wishlist.html`，路由 `GET /wishlist`、`POST /wishlist/submit`（`cps/web.py`）。
+   - 提交后 `cps/services/feishu.py::create_wishlist_record` 写入飞书多维表。
+
+2. 管理员侧（上架并通知）
+   - 页面 `cps/templates/admin_wishlist.html`，路由 `GET /admin/wishlist`、`POST /admin/wishlist/fulfill`（`cps/admin.py`，`@admin_required`）。
+   - 流程：读飞书记录 → 上传电子书建书（`cps/editbooks.py::create_book_from_uploaded_file`）→ 生成书籍页下载链接 → 发邮件通知用户（`cps/tasks/mail.py::TaskEmail`，HTML 正文）→ 回写飞书「状态」为「已通知」（`feishu.update_wishlist_record`）。
+
+### 飞书多维表字段（实际）
+- 书名、作者、邮箱、备注、提交时间（原有）
+- **状态**（单选：待处理 / 已通知）——管理员上架后自动回写；字段/选项名常量见 `cps/admin.py` 顶部。
+
+### 环境变量（`.env`，勿提交真实值）
+```
+FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_BITABLE_APP_TOKEN, FEISHU_BITABLE_TABLE_ID
+```
+
+### 邮件
+- 生产用 Gmail SMTP（smtp.gmail.com:465 SSL + 应用专用密码），在管理后台「编辑邮件服务器设置」配置，无需改代码。
+- 用户收到的链接指向书籍页（`web.show_book`），依赖站点开启匿名浏览/下载，游客方可访问。
+
+### 部署
+- `.github/workflows/docker-publish.yml`：push `master` → 构建镜像推 GHCR → SSH 到 VPS `docker compose pull/up -d` → 飞书通知。
+
+### 当前仍为人工的环节
+- 从 Z-Library 下载电子书（该站点对自动化访问不友好，暂保留人工）。
+
+## 后续可选优化
+- 已通知记录在管理页自动隐藏 / 过滤。
+- 在 n8n 中定时扫描心愿单、结合下载工具自动获取并导入。
+- 邮件文案、按钮样式进一步打磨。
