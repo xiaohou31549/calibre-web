@@ -1,3 +1,18 @@
+# calibre-web 的持续部署：在 GitHub runner 上 build，把镜像经东京跳板流式灌进 NAS。
+#
+# 这份是真相副本，实际生效的是 app 仓库
+# xiaohou31549/calibre-web 的 .github/workflows/docker-publish.yml。
+# 改动先改这里、再同步过去（见同目录 README.md）。
+#
+# 结构照抄 compose/car-config/ci/github-deploy.yml，差异：
+#   - 主分支是 master（不是 main）
+#   - 镜像名保持 ghcr.io/xiaohou31549/calibre-web，与 NAS compose 里的 image 一致
+#   - 仍推 GHCR 一份作存档（原 workflow 就推，镜像中转脚本也从这拉）
+#   - NAS 侧健康等待 20 分钟：universal-calibre mod 每次启动联网装包约 10 分钟
+#
+#   runner: docker build → push ghcr.io（存档）
+#                        → docker save | gzip
+#        └─ssh─> tokyo (只转发) ─tailnet─> nas: docker load → compose up → 健康断言
 name: Build and Deploy Calibre-Web
 
 on:
@@ -33,75 +48,86 @@ permissions:
   contents: read
   packages: write
 
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
 jobs:
-  build:
+  build-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=sha
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    if: ${{ github.event_name == 'push' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Prepare SSH key
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+      - name: Build image
         run: |
-          mkdir -p ~/.ssh
-          echo "$VPS_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          SHA="$(git rev-parse --short HEAD)"
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE:latest" -t "$IMAGE:$SHA" .
 
-      - name: Deploy over SSH
+      # PR 只验证能 build，不推不部署
+      - name: Push to GHCR (archive)
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:$SHA"
+
+      - name: Prepare SSH
+        if: ${{ github.event_name != 'pull_request' }}
         env:
+          CI_SSH_KEY: ${{ secrets.CI_SSH_KEY }}
+          CI_KNOWN_HOSTS: ${{ secrets.CI_KNOWN_HOSTS }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$CI_SSH_KEY" > ~/.ssh/ci_key && chmod 600 ~/.ssh/ci_key
+          # host key 是钉死的（安装脚本从两台机器上取的真值），不用 accept-new：
+          # 东京只是转发，但中间人换掉 NAS 的 host key 仍要能被发现。
+          printf '%s\n' "$CI_KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host tokyo-jump
+            HostName $VPS_HOST
+            User $VPS_USER
+          Host nas
+            HostName $NAS_HOST
+            User $NAS_USER
+            ProxyJump tokyo-jump
+          Host *
+            IdentityFile ~/.ssh/ci_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ServerAliveInterval 30
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Ship image to NAS through tokyo
+        if: ${{ github.event_name != 'pull_request' }}
         run: |
           set -o pipefail
-          PORT="${VPS_PORT:-22}"
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes -p "$PORT" "$VPS_USER@$VPS_HOST" \
-            'set -e; cd /root/n8n; docker compose pull calibre-web; docker compose up -d calibre-web' \
-            2>&1 | tee deploy.log
+          # NAS 侧是 forced-command，命令参数只当 sha 用；实际载荷是 stdin 的镜像流。
+          # mod 装包约 10 分钟，NAS 侧健康等待 20 分钟，这一步会挂住是正常的。
+          docker save "$IMAGE:latest" "$IMAGE:$SHA" \
+            | gzip -1 \
+            | ssh nas "$SHA" 2>&1 | tee deploy.log
+
+      - name: Verify public endpoint
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          set -o pipefail
+          url="${SITE_URL:-https://books.houjigege.club/}"
+          # 端到端：公网 → 东京 NPM → tailnet → NAS 上的新容器
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 --retry 3 --retry-delay 5 "$url")"
+          echo "GET $url -> $code" | tee -a deploy.log
+          [ "$code" = 200 ] || { echo "✗ 公网入口没回 200"; exit 1; }
 
       - name: Notify Feishu on deploy success
-        if: success()
+        if: ${{ success() && github.event_name != 'pull_request' }}
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           SITE_URL: ${{ vars.SITE_URL }}
@@ -124,7 +150,7 @@ jobs:
           run_url = os.environ.get("RUN_URL", "")
           site_url = os.environ.get("SITE_URL", "未配置")
           text = "\n".join([
-              "✅ 部署成功",
+              "✅ 部署成功（NAS）",
               f"仓库: {repo}",
               f"提交: {commit_sha}",
               "提交信息:",
@@ -137,7 +163,7 @@ jobs:
           curl -sS -X POST -H "Content-Type: application/json" -d @payload.json "$FEISHU_WEBHOOK"
 
       - name: Notify Feishu on deploy failure
-        if: failure()
+        if: ${{ failure() && github.event_name != 'pull_request' }}
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -161,13 +187,14 @@ jobs:
           run_url = os.environ.get("RUN_URL", "")
           log = os.environ.get("LOG", "")
           text = "\n".join([
-              "❌ 部署失败",
+              "❌ 部署失败（NAS）",
               f"仓库: {repo}",
               f"提交: {commit_sha}",
               "提交信息:",
               commit_msg or "(空)",
               "日志:",
               log or "(无)",
+              "NAS 侧健康断言失败会自动回滚到上一版镜像，线上应仍是旧版本。",
               f"CI: {run_url}",
           ])
           print(json.dumps({"msg_type": "text", "content": {"text": text}}, ensure_ascii=False))
